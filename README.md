@@ -1,61 +1,57 @@
-# Serva-S RAG Assistant
+# Enterprise RAG-System
 
-مشروع مساعد عربي لمتجر Serva-S يعتمد على RAG:
+A high-performance Retrieval-Augmented Generation (RAG) pipeline built in Python, designed to serve as an intelligent backend assistant for e-commerce and retail platforms. The system intelligently retrieves contextual domain knowledge and grounds Large Language Model (LLM) responses to provide accurate, safe, and context-aware customer support.
 
-1. يستقبل سؤال العميل.
-2. يبحث في خدمات المتجر والمعرفة المخزنة في Supabase.
-3. يرسل السياق للنموذج المختار.
-4. ينظف الرد من الروابط أو الادعاءات غير الآمنة.
-5. يعيد إجابة عربية مناسبة للعميل.
+## Architecture & Tech Stack
+- **Core Framework:** Python, LangChain
+- **Vector Database:** Supabase (`pgvector`) for efficient similarity search and high-dimensional embedding storage.
+- **LLM Integrations:** Flexible multi-provider support architecture including Groq, OpenRouter, Neokens, and local Ollama models.
+- **Security & Moderation:** Built-in semantic safeguards to filter out unsafe queries, malicious prompt injections, and off-topic requests.
 
-## أهم الملفات
+## Key Features
+- **Semantic Retrieval Pipeline:** Connects to a Supabase vector store to pull relevant policies, products, and FAQs based on user queries using cosine similarity.
+- **Dynamic Context Injection:** Injects high-relevance text chunks into the LLM context window to eliminate hallucinations and ground responses.
+- **Multi-LLM Routing:** Easily switch between different language models based on latency, cost, or availability constraints.
+- **Policy Enforcement:** Validates inputs and outputs against predefined safety and policy rules before returning responses to the end-user.
 
-| الملف | الوظيفة |
-|---|---|
-| `scripts/rag_core.py` | قلب المشروع: البحث، بناء السياق، الردود المباشرة، وحماية المخرجات |
-| `scripts/llm_client.py` | تشغيل مزود النموذج: Groq أو OpenRouter أو Neokens أو Ollama |
-| `scripts/app_config.py` | قراءة `.env` وتجميع الإعدادات |
-| `scripts/embedding_utils.py` | أدوات مشتركة لإنشاء embeddings والحفظ في Supabase |
-| `scripts/fill_ai_pro.py` | تحويل جدول الخدمات إلى embeddings |
-| `scripts/fill_policies_ai.py` | تحويل السياسات والأسئلة الشائعة إلى embeddings |
-| `scripts/fill_scenarios_ai.py` | تحويل سيناريوهات العملاء إلى embeddings |
-| `scripts/fill_risk_scenarios.py` | تحويل سيناريوهات تصحيح الأخطاء إلى embeddings |
-| `scripts/fill_public_knowledge.py` | تحويل التصنيفات، المجموعات، العروض، التحديثات، والصفحات العامة إلى embeddings |
-| `scripts/fill_safety_rules.py` | تعبئة قواعد الأمان في جدول منفصل |
-| `scripts/eval_test.py` | اختبار المساعد على مجموعة أسئلة |
-| `scripts/chat_ai.py` | اختبار سريع من الطرفية |
-| `scripts/gradio_chat.py` | واجهة محلية بسيطة للتجربة |
-| `supabase_final_setup.sql` | كود إنشاء جداول ودوال Supabase |
-| `supabase_reset_embeddings.sql` | كود اختياري لحذف embeddings فقط وإعادة بنائها |
-| `RUN_MANUAL_AR.md` | تسلسل التشغيل اليدوي خطوة بخطوة |
+## Getting Started
 
-## التشغيل السريع
+### Prerequisites
+- Python 3.9+
+- Supabase project with `pgvector` extension enabled
+- API Keys for your preferred LLM provider (e.g., Groq, OpenAI)
 
-اتبع الملف:
+### Installation
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/malheasa0t-prog/RAG-System.git
+   cd RAG-System
+   ```
 
-```text
-RUN_MANUAL_AR.md
-```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-أهم الأوامر بعد تجهيز `.env` وقاعدة البيانات:
+3. Environment Setup:
+   Copy `.env.example` to `.env` and configure your Supabase credentials and LLM API keys.
 
-```powershell
-python scripts\fill_safety_rules.py
+### Usage
+- Initialize and populate vector database embeddings (Run once):
+  ```bash
+  python scripts/fill_ai_pro.py
+  python scripts/fill_policies_ai.py
+  ```
 
-$env:RESET_SERVICE_DOCUMENTS='true'; python scripts\fill_ai_pro.py; Remove-Item Env:RESET_SERVICE_DOCUMENTS
-$env:RESET_POLICY_DOCUMENTS='true'; python scripts\fill_policies_ai.py; Remove-Item Env:RESET_POLICY_DOCUMENTS
-$env:RESET_SCENARIO_DOCUMENTS='true'; python scripts\fill_scenarios_ai.py; Remove-Item Env:RESET_SCENARIO_DOCUMENTS
+- Start the CLI interactive testing interface:
+  ```bash
+  python scripts/chat_ai.py
+  ```
 
-python scripts\fill_risk_scenarios.py
-python scripts\fill_public_knowledge.py
-python scripts\eval_test.py
-python scripts\chat_ai.py
-```
+- Start the Gradio Web UI for user interaction:
+  ```bash
+  python scripts/gradio_chat.py
+  ```
 
-## ملاحظات مهمة
-
-- لا ترفع ملف `.env` ولا تضع المفاتيح داخل الكود.
-- `SUPABASE_KEY` يجب أن يكون في السيرفر فقط، وليس في المتصفح.
-- لا تشغّل `supabase_reset_embeddings.sql` إلا إذا أردت حذف معرفة الذكاء القديمة وإعادة بنائها.
-- إذا عدّلت الخدمات أو السياسات أو السيناريوهات، أعد تشغيل سكربت التعبئة المناسب ثم شغّل الاختبار.
-- المشروع جاهز للتعلم والتجربة، أما الإطلاق على موقع حقيقي فيحتاج API backend وحماية rate limit ومراقبة تكاليف.
+## License
+Distributed under the MIT License.
