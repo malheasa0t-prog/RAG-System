@@ -26,7 +26,7 @@ The project is intentionally small and operational: one codebase for ingestion, 
 | `scripts/eval_test_extended.py` | Extended acceptance evaluation suite |
 | `supabase_final_setup.sql` | Supabase schema and function setup |
 | `supabase_reset_embeddings.sql` | Optional reset script for embeddings only |
-| `docs/guide-ar.md` | Arabic setup and operations guide |
+| `docs/setup-guide.md` | Detailed setup and operations guide |
 
 ## Quick start
 
@@ -92,4 +92,4 @@ Evaluation output is written to `reports/`, which is intentionally ignored by Gi
 - Do not commit `.env` or service-role keys.
 - The service-role key belongs on the backend only.
 - Generated reports, logs, archives, and local experiments are excluded from version control.
-- The Arabic operations guide is available in [docs/guide-ar.md](docs/guide-ar.md).
+- A more detailed English setup guide is available in [docs/setup-guide.md](docs/setup-guide.md).
