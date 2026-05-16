@@ -1,8 +1,17 @@
 # Serva-S RAG Assistant
 
+[![Repository Health](https://github.com/malheasa0t-prog/RAG-System/actions/workflows/repository-health.yml/badge.svg)](https://github.com/malheasa0t-prog/RAG-System/actions/workflows/repository-health.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 This repository contains the backend-side RAG assistant used to answer store questions for Serva-S. It retrieves store services, policies, safety rules, and support guidance from Supabase, then builds grounded replies through the configured LLM provider.
 
 The project is intentionally small and operational: one codebase for ingestion, retrieval, local testing, and evaluation.
+
+## Repository health
+
+- Public-safe CI now verifies dependency installation, Python compilation, and repository structure on every push and pull request.
+- `scripts/repo_smoke_check.py` keeps README, setup docs, `.env.example`, and ignore rules aligned without requiring secrets.
+- Live evaluation still requires private API keys, but basic repository quality checks can run in public GitHub Actions.
 
 ## What the project does
 
@@ -93,6 +102,12 @@ python scripts\eval_test_extended.py
 ```
 
 Evaluation output is written to `reports/`, which is intentionally ignored by Git.
+
+If you want a public-safe CI check that does not call external providers, run:
+
+```powershell
+python scripts\repo_smoke_check.py
+```
 
 ## Notes
 
