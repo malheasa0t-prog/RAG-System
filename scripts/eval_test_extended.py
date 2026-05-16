@@ -10,10 +10,9 @@ from __future__ import annotations
 import argparse
 import re
 from datetime import datetime
-from pathlib import Path
 
 try:
-    from .app_config import ROOT_DIR, require_runtime_secrets
+    from .app_config import REPORTS_DIR, require_runtime_secrets
     from .eval_test import (
         TEST_CASES as BASE_TEST_CASES,
         contains_forbidden_keywords,
@@ -25,7 +24,7 @@ try:
     from .llm_client import current_model_name
     from .rag_core import answer_question
 except ImportError:
-    from app_config import ROOT_DIR, require_runtime_secrets
+    from app_config import REPORTS_DIR, require_runtime_secrets
     from eval_test import (
         TEST_CASES as BASE_TEST_CASES,
         contains_forbidden_keywords,
@@ -40,7 +39,7 @@ except ImportError:
 
 require_runtime_secrets()
 
-REPORT_PATH = Path(ROOT_DIR) / "eval_results_extended.md"
+REPORT_PATH = REPORTS_DIR / "eval_results_extended.md"
 
 
 def case(
@@ -399,12 +398,13 @@ def run_evaluation(start: int = 1, limit: int | None = None) -> float:
     rows = evaluate_cases(selected, start_index=start)
     passed_count = sum(row["passed"] for row in rows)
     overall = passed_count / len(rows) * 100 if rows else 0.0
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     if start == 1 and end == len(TEST_CASES):
         REPORT_PATH.write_text(format_report(rows, overall), encoding="utf-8")
         print(f"تم حفظ التقرير الكامل في: {REPORT_PATH}")
     else:
-        partial_path = Path(ROOT_DIR) / f"eval_results_extended_{start}_{end}.md"
+        partial_path = REPORTS_DIR / f"eval_results_extended_{start}_{end}.md"
         partial_path.write_text(format_report(rows, overall), encoding="utf-8")
         print(f"تم حفظ تقرير الدفعة في: {partial_path}")
 

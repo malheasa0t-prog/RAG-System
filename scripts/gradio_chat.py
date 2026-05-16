@@ -35,7 +35,13 @@ def create_interface():
             if not str(user_message or "").strip():
                 return "", history, session_id
 
-            answer, session_id = answer_question(user_message, history, session_id, save=True)
+            answer, session_id = answer_question(
+                user_message,
+                history,
+                session_id,
+                save=True,
+                rate_limit_key=session_id,
+            )
             history.append({"role": "user", "content": user_message})
             history.append({"role": "assistant", "content": answer})
             return "", history, session_id

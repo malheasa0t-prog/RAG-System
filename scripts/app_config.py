@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT_DIR / ".env"
+REPORTS_DIR = ROOT_DIR / "reports"
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")

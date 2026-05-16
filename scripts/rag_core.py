@@ -7,6 +7,7 @@ should call this module instead of duplicating search and answer logic.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 import time
 import uuid
@@ -29,6 +30,11 @@ require_runtime_secrets()
 embeddings_model = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2")
 
 RULE_CACHE = {"expires_at": 0.0, "text": ""}
+
+MAX_USER_MESSAGE_CHARS = 2000
+MAX_SAVED_MESSAGE_CHARS = 3000
+MAX_SESSION_ID_CHARS = 128
+MAX_RATE_LIMIT_KEY_CHARS = 256
 
 SERVICE_SELECT = (
     "id,smm_service_id,name_ar,name_en,description,description_en,category,platform,"
@@ -155,6 +161,56 @@ def supabase_post(path: str, payload: dict) -> requests.Response:
     )
 
 
+SENSITIVE_VALUE_PATTERNS = [
+    (
+        re.compile(
+            r"(?i)\b(password|pass|otp|2fa|pin|verification\s+code|security\s+code)\b\s*[:=：-]?\s*\S+"
+        ),
+        r"\1: [redacted]",
+    ),
+    (
+        re.compile(
+            r"(كلمة\s*المرور|كود\s*التحقق|رمز\s*التحقق|رمز\s*الدخول|رمز\s*الأمان|كود)\s*[:=：-]?\s*\S+"
+        ),
+        r"\1: [redacted]",
+    ),
+    (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "[redacted-card-number]"),
+]
+
+
+def normalize_session_id(session_id: str | None) -> str:
+    """Keep session ids safe for PostgREST filters and reasonably short."""
+    text = str(session_id or "").strip()
+    if not text:
+        return str(uuid.uuid4())
+    text = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text)
+    text = text[:MAX_SESSION_ID_CHARS].strip("._:-")
+    return text or str(uuid.uuid4())
+
+
+def normalize_rate_limit_key(rate_limit_key: str | None) -> str | None:
+    """Hash caller-provided user/IP keys so logs do not store raw identifiers."""
+    text = str(rate_limit_key or "").strip()
+    if not text:
+        return None
+    if text.startswith("sha256:") and len(text) == 71:
+        return text
+    text = text[:MAX_RATE_LIMIT_KEY_CHARS]
+    digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def sanitize_chat_message(message: str) -> str:
+    """Remove obvious secrets before persisting support chat messages."""
+    text = str(message or "")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text).strip()
+    for pattern, replacement in SENSITIVE_VALUE_PATTERNS:
+        text = pattern.sub(replacement, text)
+    if len(text) > MAX_SAVED_MESSAGE_CHARS:
+        text = f"{text[:MAX_SAVED_MESSAGE_CHARS].rstrip()}\n[truncated]"
+    return text
+
+
 def load_answer_rules(limit: int = 20) -> str:
     """Load dynamic safety rules from ai_safety_rules."""
     now = time.time()
@@ -188,18 +244,36 @@ def load_answer_rules(limit: int = 20) -> str:
         return ""
 
 
-def save_message(session_id: str, role: str, message: str) -> None:
+def save_message(
+    session_id: str,
+    role: str,
+    message: str,
+    rate_limit_key: str | None = None,
+) -> None:
     try:
-        supabase_post(
-            "chat_sessions",
-            {"session_id": session_id, "role": role, "message": message},
-        )
+        payload = {
+            "session_id": normalize_session_id(session_id),
+            "role": role,
+            "message": sanitize_chat_message(message),
+        }
+        normalized_rate_key = normalize_rate_limit_key(rate_limit_key)
+        if normalized_rate_key:
+            payload["rate_limit_key"] = normalized_rate_key
+
+        response = supabase_post("chat_sessions", payload)
+        if response.status_code in {400, 404} and "rate_limit_key" in payload:
+            # Older databases may not have the new column yet; keep logging alive.
+            payload.pop("rate_limit_key", None)
+            response = supabase_post("chat_sessions", payload)
+        if response.status_code >= 400:
+            print(f"Save message failed: HTTP {response.status_code} - {response.text[:200]}")
     except Exception as exc:
         print(f"⚠️ تعذر حفظ الرسالة: {exc}")
 
 
 def load_history(session_id: str, limit: int = 20) -> list[HumanMessage | AIMessage]:
     try:
+        session_id = normalize_session_id(session_id)
         response = supabase_get(
             "chat_sessions",
             {
@@ -930,6 +1004,60 @@ def lookup_services_by_keywords(question: str, limit: int = 6) -> list[dict]:
     ]
 
 
+def lookup_knowledge_documents_by_keywords(question: str, limit: int = 4) -> list[dict]:
+    """Text fallback for policies/FAQs when embeddings are unavailable."""
+    documents_by_id = {}
+    original_terms = extract_lookup_terms(question, limit=6)
+    expanded_terms = expand_lookup_terms(original_terms)
+
+    for term in expanded_terms[:8]:
+        safe_term = re.sub(r"[%*,()]+", " ", term).strip()
+        if len(safe_term) < 3:
+            continue
+        try:
+            response = supabase_get(
+                "ai_knowledge_documents",
+                {
+                    "select": "id,document_type,title,content,priority",
+                    "is_active": "eq.true",
+                    "or": f"(title.ilike.*{safe_term}*,content.ilike.*{safe_term}*)",
+                    "limit": "20",
+                },
+            )
+        except Exception:
+            continue
+        if response.status_code != 200:
+            continue
+        for document in response.json():
+            document_id = document.get("id")
+            if document_id:
+                documents_by_id[document_id] = document
+
+    scored_documents = []
+    for document in documents_by_id.values():
+        text = normalize_search_text(
+            " ".join([document.get("title") or "", document.get("content") or ""])
+        )
+        score = int(document.get("priority") or 0)
+        for term in original_terms:
+            aliases = TERM_EXPANSIONS.get(term.lower(), [term])
+            if any(normalize_search_text(alias) in text for alias in aliases):
+                score += 4
+        scored_documents.append((score, document))
+
+    scored_documents.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            "content": (
+                f"[{document.get('document_type') or 'knowledge'}] "
+                f"{document.get('title') or 'وثيقة معرفة'}\n{document.get('content') or ''}"
+            ),
+            "similarity": score,
+        }
+        for score, document in scored_documents[:limit]
+    ]
+
+
 def vector_search(question: str) -> list[dict]:
     """Search old ai_documents and new ai_knowledge_documents."""
     vector = embeddings_model.embed_query(question)
@@ -967,17 +1095,18 @@ def vector_search(question: str) -> list[dict]:
 def search_knowledge(question: str) -> list[dict]:
     """Combine live keyword lookup with vector search."""
     direct_results = lookup_services_by_keywords(question)
+    document_results = lookup_knowledge_documents_by_keywords(question)
     if direct_results and direct_results[0].get("similarity", 0) >= 30:
-        return direct_results
+        return direct_results + document_results[:2]
 
     try:
-        return direct_results + vector_search(question)
+        return direct_results + document_results + vector_search(question)
     except Exception as exc:
         if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
             print("⚠️ حصة Google Embeddings ممتلئة؛ سيتم استخدام البحث النصي المباشر فقط.")
         else:
             print(f"⚠️ فشل البحث المتجهي: {exc}")
-        return direct_results
+        return direct_results + document_results
 
 
 def build_context(results: list[dict]) -> str:
@@ -1147,7 +1276,13 @@ def direct_policy_answer(message: str) -> str | None:
             return order_instruction("en", "Review the service details, price, and guarantee before confirming.")
         return order_instruction("ar", "راجع تفاصيل الخدمة والسعر والضمان قبل التأكيد، وبعدها تابع الحالة من طلباتي.")
 
-    if has_any(text, ["كلمة مرور", "password", "كود تحقق", "رمز تحقق"]):
+    if has_any(
+        text,
+        [
+            "كلمة مرور", "كلمة المرور", "باسورد", "كود تحقق", "رمز تحقق", "رمز التحقق",
+            "password", "passcode", "verification code", "otp", "2fa", "card details",
+        ],
+    ):
         if preferred_language(message) == "en":
             return (
                 "No, do not send your account password, verification code, card details, or any sensitive information. "
@@ -1225,7 +1360,13 @@ def direct_policy_answer(message: str) -> str | None:
             f"{support_instruction('ar', include_order_number=False)}"
         )
 
-    if has_any(text, ["رصيدي", "أدفع", "ادفع", "الدفع", "محفظة", "اشحن رصيدي"]):
+    if has_any(
+        text,
+        [
+            "رصيدي", "أدفع", "ادفع", "الدفع", "محفظة", "اشحن رصيدي", "إيداع", "ايداع",
+            "add balance", "top up balance", "deposit", "wallet", "payment",
+        ],
+    ):
         if preferred_language(message) == "en":
             return (
                 "To add balance, open My Wallet, choose the currency, transfer to the account shown on the deposit page, "
@@ -1248,33 +1389,48 @@ def direct_policy_answer(message: str) -> str | None:
     return None
 
 
-def check_rate_limit(session_id: str, limit: int = 15) -> tuple[bool, str | None]:
-    """Check if the session has exceeded the rate limit (messages per hour)."""
+def check_rate_limit(
+    session_id: str,
+    rate_limit_key: str | None = None,
+    limit: int = 15,
+) -> tuple[bool, str | None]:
+    """Check if the caller exceeded the hourly message limit."""
     one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    session_id = normalize_session_id(session_id)
+    normalized_rate_key = normalize_rate_limit_key(rate_limit_key)
+
+    params = {
+        "select": "id",
+        "role": "eq.user",
+        "created_at": f"gte.{one_hour_ago}",
+        "limit": str(limit + 1),
+    }
+    if normalized_rate_key:
+        params["rate_limit_key"] = f"eq.{normalized_rate_key}"
+    else:
+        params["session_id"] = f"eq.{session_id}"
+
     try:
-        response = supabase_get(
-            "chat_sessions",
-            {
-                "select": "id",
-                "session_id": f"eq.{session_id}",
-                "role": "eq.user",
-                "created_at": f"gte.{one_hour_ago}",
-                "limit": str(limit + 1),
-            }
-        )
+        response = supabase_get("chat_sessions", params)
+        if response.status_code in {400, 404} and normalized_rate_key:
+            # Fallback until supabase_final_setup.sql is applied.
+            params.pop("rate_limit_key", None)
+            params["session_id"] = f"eq.{session_id}"
+            response = supabase_get("chat_sessions", params)
+
         if response.status_code == 200:
             count = len(response.json())
-            
+
             if count >= limit:
-                return True, "🚫 لقد تجاوزت الحد الأقصى من الرسائل المسموحة (15 رسالة في الساعة). تم إيقاف الخدمة مؤقتاً لتجنب إساءة الاستخدام. يرجى العودة بعد ساعة."
-            
+                return True, "لقد تجاوزت الحد الأقصى من الرسائل المسموحة (15 رسالة في الساعة). يرجى العودة بعد ساعة."
+
             if count == limit - 1:
-                return False, "⚠️ تنبيه: لقد وصلت للحد الأقصى للرسائل في هذه الساعة (15 رسالة). رسالتك القادمة ستؤدي إلى حظر مؤقت لمدة ساعة."
-                
+                return False, "تنبيه: وصلت للحد الأقصى للرسائل في هذه الساعة. الرسالة القادمة قد توقف الخدمة مؤقتا لمدة ساعة."
+
             return False, None
     except Exception as exc:
         print(f"⚠️ تعذر التحقق من Rate Limit: {exc}")
-    
+
     return False, None
 
 
@@ -1284,14 +1440,29 @@ def answer_question(
     session_id: str | None = None,
     save: bool = True,
     use_helpers: bool = True,
+    rate_limit_key: str | None = None,
 ) -> tuple[str, str]:
     """Answer one user message and optionally persist it."""
     if isinstance(message, dict):
         message = message.get("content", "")
     message = str(message or "").strip()
-    session_id = session_id or str(uuid.uuid4())
-    
-    is_banned, rate_warning = check_rate_limit(session_id)
+    session_id = normalize_session_id(session_id)
+    normalized_rate_key = normalize_rate_limit_key(rate_limit_key)
+
+    if not message:
+        return "", session_id
+
+    if len(message) > MAX_USER_MESSAGE_CHARS:
+        if preferred_language(message) == "en":
+            answer = "Your message is too long. Please shorten it and send the key details only."
+        else:
+            answer = "رسالتك طويلة جدا. اختصرها وأرسل أهم التفاصيل فقط حتى أقدر أساعدك."
+        if save:
+            save_message(session_id, "user", message, normalized_rate_key)
+            save_message(session_id, "assistant", answer, normalized_rate_key)
+        return answer, session_id
+
+    is_banned, rate_warning = check_rate_limit(session_id, normalized_rate_key)
     if is_banned:
         return rate_warning, session_id
 
@@ -1300,8 +1471,8 @@ def answer_question(
     direct_answer = direct_catalog_answer(effective_message) or direct_policy_answer(effective_message)
     if direct_answer is not None:
         if save:
-            save_message(session_id, "user", message)
-            save_message(session_id, "assistant", direct_answer)
+            save_message(session_id, "user", message, normalized_rate_key)
+            save_message(session_id, "assistant", direct_answer, normalized_rate_key)
             
         if rate_warning:
             direct_answer = f"{direct_answer}\n\n{rate_warning}"
@@ -1336,8 +1507,8 @@ def answer_question(
             answer = "عذرًا، حدثت مشكلة مؤقتة أثناء تجهيز الرد. جرّب مرة أخرى، أو اكتب المشكلة هنا وسيتم متابعتها ضمن هذه المحادثة."
 
     if save:
-        save_message(session_id, "user", message)
-        save_message(session_id, "assistant", answer)
+        save_message(session_id, "user", message, normalized_rate_key)
+        save_message(session_id, "assistant", answer, normalized_rate_key)
 
     if rate_warning:
         answer = f"{answer}\n\n{rate_warning}"

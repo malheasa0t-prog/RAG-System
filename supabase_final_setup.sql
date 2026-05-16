@@ -22,13 +22,21 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS public.chat_sessions (
   id SERIAL PRIMARY KEY,
   session_id TEXT NOT NULL,
+  rate_limit_key TEXT,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   message TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE public.chat_sessions
+ADD COLUMN IF NOT EXISTS rate_limit_key TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_session_id
 ON public.chat_sessions(session_id);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_rate_limit_key_created_at
+ON public.chat_sessions(rate_limit_key, created_at DESC)
+WHERE rate_limit_key IS NOT NULL;
 
 ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
 

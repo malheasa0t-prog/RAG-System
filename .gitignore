@@ -3,12 +3,25 @@
 venv/
 __pycache__/
 *.py[cod]
-*.log
-*.err
-eval_results_*.md
-eval_results_full.md
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local runtime output
+reports/
+*.log
+*.err
+eval_results_*.md
+eval_results_*.html
+ollama_serve.log
+ollama_serve.err
+
+# Local-only experiments and archives
+cloudflare-gemini-smoke/
+*.rar
+study_plan.html
+STUDY_PLAN_*.md
+
+# Build output
 dist/
 build/

@@ -5,16 +5,15 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage
 
 try:
-    from .app_config import ROOT_DIR, require_runtime_secrets
+    from .app_config import REPORTS_DIR, require_runtime_secrets
     from .llm_client import chat_text, current_model_name
     from .rag_core import answer_question
 except ImportError:
-    from app_config import ROOT_DIR, require_runtime_secrets
+    from app_config import REPORTS_DIR, require_runtime_secrets
     from llm_client import chat_text, current_model_name
     from rag_core import answer_question
 
@@ -22,7 +21,7 @@ except ImportError:
 require_runtime_secrets()
 
 USE_JUDGE = os.getenv("EVAL_USE_JUDGE", "false").strip().lower() in {"1", "true", "yes"}
-REPORT_PATH = Path(ROOT_DIR) / "eval_results_full.md"
+REPORT_PATH = REPORTS_DIR / "eval_results_full.md"
 
 
 TEST_CASES = [
@@ -498,6 +497,7 @@ def run_evaluation() -> float:
 
     passed_count = sum(row["passed"] for row in rows)
     overall = passed_count / len(rows) * 100
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(format_report(rows, overall), encoding="utf-8")
 
     print("\n" + "=" * 70)
