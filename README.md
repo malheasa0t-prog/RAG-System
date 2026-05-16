@@ -12,6 +12,13 @@ The project is intentionally small and operational: one codebase for ingestion, 
 - Supports multiple providers: Groq, OpenRouter, Neokens, and local Ollama.
 - Includes local chat entry points plus smoke and extended evaluation scripts.
 
+## Engineering Review Notes
+
+- `scripts/rag_core.py` includes a deterministic direct-answer layer named `direct_catalog_answer` for sensitive store questions such as support, service availability, Netflix, PUBG UC, and Free Fire. This keeps high-risk answers controlled before LLM generation.
+- As the rule set grows, the direct-answer layer should be split into focused handlers such as `support_handler`, `chatgpt_handler`, `netflix_handler`, `pubg_handler`, and `free_fire_handler`.
+- Stable business rules can move to Supabase when they are content-like, such as availability messages, forbidden claims, or canned support guidance. Runtime calculations such as live pricing and cheapest-package selection should remain in code.
+- The evaluation scripts use keyword, forbidden-term, link, and language checks. Before production, critical flows should also include judge-model review or manual review cases for passwords, refunds, disabled services, invented prices, and mixed-product questions.
+
 ## Repository layout
 
 | Path | Purpose |
